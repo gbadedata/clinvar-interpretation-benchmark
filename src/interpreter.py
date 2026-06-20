@@ -216,12 +216,14 @@ class ClaudeInterpreter:
     path share identical scoring.
     """
 
-    def __init__(self, model: str = "claude-sonnet-4-6", max_tokens: int = 1024) -> None:
+    def __init__(self, model: str | None = None, max_tokens: int | None = None) -> None:
         from anthropic import Anthropic
 
+        from config.settings import settings
+
         self.client = Anthropic()
-        self.model = model
-        self.max_tokens = max_tokens
+        self.model = model or settings.model
+        self.max_tokens = max_tokens or settings.max_tokens
 
     def interpret(self, variant: Variant) -> InterpretationResult:
         message = self.client.messages.create(

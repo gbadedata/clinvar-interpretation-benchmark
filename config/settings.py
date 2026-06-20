@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     n_variants_per_tier: int = 100
     random_seed: int = 42
 
+    # ── Live model ─────────────────────────────────────────────────────
+    # Model string for live evaluation runs. Override with CLINVAR_MODEL or
+    # the --model CLI flag. Set this to whatever Opus/Sonnet identifier your
+    # Anthropic account exposes (check https://docs.claude.com for the
+    # current model strings).
+    model: str = "claude-opus-4-1"
+    max_tokens: int = 1024
+
     # ── Scoring ────────────────────────────────────────────────────────
     # Minimum oracle agreement (accuracy) for the benchmark to "pass" as a
     # whole. Calibrated, not aspirational; documented in the README.

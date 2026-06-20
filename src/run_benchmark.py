@@ -87,15 +87,22 @@ def main() -> None:
                         help="use the bundled fixture instead of downloading ClinVar")
     parser.add_argument("--real-data", action="store_true",
                         help="download real ClinVar (with the mock interpreter)")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="cap the task set to the first N variants (for small test runs)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="override the model string for live runs")
     args = parser.parse_args()
 
     use_synthetic = args.synthetic or not (args.live or args.real_data)
     log.info("loading_task_set", synthetic=use_synthetic)
     task = get_task_set(use_synthetic=use_synthetic)
+    if args.limit is not None:
+        task = task[: args.limit]
+        log.info("task_limited", n=len(task))
 
     if args.live:
         from src.interpreter import ClaudeInterpreter
-        interpreter: VariantInterpreter = ClaudeInterpreter()
+        interpreter: VariantInterpreter = ClaudeInterpreter(model=args.model)
         model_name = interpreter.model
         progress = True
     else:
