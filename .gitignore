@@ -7,3 +7,4 @@ data/
 .coverage
 htmlcov/
 evidence/figures/*.png
+evidence/reports/*.json
