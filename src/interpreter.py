@@ -1,0 +1,234 @@
+"""Model interface for variant interpretation.
+
+The benchmark scores any model that implements the VariantInterpreter
+protocol. The scoring logic never depends on which model is used; this
+separation is itself an evaluation-design principle.
+
+Two implementations live here:
+  - MockInterpreter: deterministic, seeded, no network. Used in all unit
+    tests and CI. Lets the entire scoring framework be validated without
+    an API key.
+  - ClaudeInterpreter: wires in the real Anthropic API. Used only for live
+    evaluation runs (see src/run_live.py), never in CI.
+
+Both return a strict, validated InterpretationResult. The model is asked
+to reply in strict JSON, which is parsed and validated; malformed output
+is handled explicitly rather than silently mis-scored.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import random
+import re
+from typing import Protocol
+
+from src.data_models import Classification, InterpretationResult, Variant
+
+logger = logging.getLogger(__name__)
+
+
+# ── The prompt ─────────────────────────────────────────────────────────
+# The model receives ONLY the context fields (gene, HGVS, consequence,
+# condition). It is explicitly told to return strict JSON with both a
+# classification and the structured reasoning the validators check.
+
+SYSTEM_PROMPT = """You are a clinical variant interpretation assistant. \
+You classify germline genetic variants using ACMG/AMP-style reasoning. \
+You are given structured variant information and must return your \
+assessment as strict JSON only, with no surrounding prose or markdown.
+
+You must respond with a single JSON object with exactly these keys:
+  "classification": one of "pathogenic", "benign", "vus"
+        (use "pathogenic" for pathogenic or likely pathogenic,
+         "benign" for benign or likely benign,
+         "vus" for uncertain significance)
+  "gene": the gene symbol you believe carries this variant
+  "consequence": the molecular consequence (e.g. missense, nonsense,
+         frameshift, splice, synonymous, in-frame deletion)
+  "mechanism": the disease mechanism if pathogenic
+         (e.g. "loss-of-function", "gain-of-function", "none")
+  "reasoning": a brief explanation of your classification (2-4 sentences)
+  "cited_evidence": a list of evidence types you relied on
+         (e.g. ["consequence", "gene-disease association"]). Only list
+         evidence that was provided to you; do not invent specific
+         studies, frequencies, or database entries you were not given.
+
+Return ONLY the JSON object."""
+
+
+def build_user_prompt(variant: Variant) -> str:
+    """Build the user message for a single variant from its context."""
+    ctx = variant.to_prompt_context()
+    return (
+        "Classify the following germline variant.\n\n"
+        f"Gene: {ctx['gene']}\n"
+        f"HGVS (coding): {ctx['hgvs_c']}\n"
+        f"HGVS (protein): {ctx['hgvs_p']}\n"
+        f"Variant type: {ctx['consequence']}\n"
+        f"Associated condition: {ctx['condition']}\n\n"
+        "Respond with the JSON object only."
+    )
+
+
+# ── Response parsing ───────────────────────────────────────────────────
+
+def parse_response(variant_id: str, raw: str) -> InterpretationResult:
+    """Parse a model's raw text into a validated InterpretationResult.
+
+    Robust to common formatting noise: code fences, leading prose, or a
+    JSON object embedded in surrounding text. If no valid classification
+    can be recovered, returns a VUS result flagged in its reasoning, so a
+    malformed response scores as an (incorrect) uncertain call rather than
+    crashing the run.
+    """
+    obj = _extract_json(raw)
+    if obj is None:
+        logger.warning("unparseable_response: %s", variant_id)
+        return InterpretationResult(
+            variant_id=variant_id,
+            classification=Classification.VUS,
+            reasoning="UNPARSEABLE_RESPONSE",
+            raw_response=raw,
+        )
+
+    cls = _coerce_classification(obj.get("classification", ""))
+    evidence = obj.get("cited_evidence", [])
+    if not isinstance(evidence, list):
+        evidence = [str(evidence)]
+
+    return InterpretationResult(
+        variant_id=variant_id,
+        classification=cls,
+        stated_gene=str(obj.get("gene", "")).strip(),
+        stated_consequence=str(obj.get("consequence", "")).strip().lower(),
+        stated_mechanism=str(obj.get("mechanism", "")).strip().lower(),
+        reasoning=str(obj.get("reasoning", "")).strip(),
+        cited_evidence=[str(e).strip() for e in evidence],
+        raw_response=raw,
+    )
+
+
+def _extract_json(raw: str) -> dict | None:
+    """Pull the first valid JSON object out of a raw model response."""
+    # Strip code fences if present
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip()
+    # Fast path: whole string is JSON
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: find the first {...} block
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
+def _coerce_classification(value: str) -> Classification:
+    """Map a model's classification string to the Classification enum."""
+    s = str(value).strip().lower()
+    if s in ("pathogenic", "likely pathogenic", "p", "lp"):
+        return Classification.PATHOGENIC
+    if s in ("benign", "likely benign", "b", "lb"):
+        return Classification.BENIGN
+    return Classification.VUS
+
+
+# ── Interpreter protocol and implementations ───────────────────────────
+
+class VariantInterpreter(Protocol):
+    """Any model that can interpret a variant implements this."""
+
+    def interpret(self, variant: Variant) -> InterpretationResult:
+        ...
+
+
+class MockInterpreter:
+    """Deterministic interpreter for tests and CI, no network required.
+
+    Its behaviour is a simple, transparent heuristic, NOT a real model: it
+    classifies loss-of-function consequences as pathogenic, synonymous as
+    benign, and otherwise echoes a seeded pseudo-random class. The point is
+    not accuracy; it is to exercise the full scoring path deterministically.
+
+    An optional `accuracy` parameter lets tests request a mock that copies
+    the oracle a fixed fraction of the time, so scoring metrics can be
+    asserted against a known expected value.
+    """
+
+    def __init__(self, seed: int = 42, accuracy: float | None = None) -> None:
+        self.rng = random.Random(seed)
+        self.accuracy = accuracy
+
+    def interpret(self, variant: Variant) -> InterpretationResult:
+        if self.accuracy is not None:
+            # Controlled-accuracy mock: copy oracle `accuracy` of the time
+            if self.rng.random() < self.accuracy:
+                cls = variant.oracle_classification
+            else:
+                others = [c for c in Classification if c != variant.oracle_classification]
+                cls = self.rng.choice(others)
+        else:
+            cls = self._heuristic(variant)
+
+        return InterpretationResult(
+            variant_id=variant.variant_id,
+            classification=cls,
+            stated_gene=variant.gene,
+            stated_consequence=self._infer_consequence(variant),
+            stated_mechanism="loss-of-function" if cls == Classification.PATHOGENIC else "none",
+            reasoning="Mock heuristic interpretation for testing.",
+            cited_evidence=["consequence"],
+            raw_response="<mock>",
+        )
+
+    @staticmethod
+    def _infer_consequence(variant: Variant) -> str:
+        name = (variant.hgvs_p + " " + variant.consequence).lower()
+        if "fs" in name or "deletion" in name:
+            return "frameshift"
+        if "ter" in name or "*" in name:
+            return "nonsense"
+        if "=" in variant.hgvs_p:
+            return "synonymous"
+        return "missense"
+
+    def _heuristic(self, variant: Variant) -> Classification:
+        cons = self._infer_consequence(variant)
+        if cons in ("frameshift", "nonsense"):
+            return Classification.PATHOGENIC
+        if cons == "synonymous":
+            return Classification.BENIGN
+        return self.rng.choice(list(Classification))
+
+
+class ClaudeInterpreter:
+    """Real Anthropic API interpreter. Used only for live runs, not CI.
+
+    Requires the ANTHROPIC_API_KEY environment variable. Kept deliberately
+    thin: it sends the system prompt plus the per-variant user prompt and
+    delegates all parsing to parse_response, so the live path and the test
+    path share identical scoring.
+    """
+
+    def __init__(self, model: str = "claude-sonnet-4-6", max_tokens: int = 1024) -> None:
+        from anthropic import Anthropic
+
+        self.client = Anthropic()
+        self.model = model
+        self.max_tokens = max_tokens
+
+    def interpret(self, variant: Variant) -> InterpretationResult:
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": build_user_prompt(variant)}],
+        )
+        raw = "".join(block.text for block in message.content if hasattr(block, "text"))
+        return parse_response(variant.variant_id, raw)
