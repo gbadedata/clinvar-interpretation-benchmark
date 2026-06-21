@@ -10,3 +10,5 @@ evidence/figures/*.png
 evidence/reports/*.json
 .env
 diag_live.py
+inspect_reasoning.py
+diag_live.py
