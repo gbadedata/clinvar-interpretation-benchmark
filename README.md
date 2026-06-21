@@ -282,8 +282,6 @@ clinvar-interpretation-benchmark/
 
 ## References
 
-All citations below were verified against the primary source (journal record or PubMed) rather than reproduced from memory. DOIs and PubMed IDs are included so any claim can be traced.
-
 **Ground truth and clinical interpretation framework**
 
 1. Landrum MJ, Lee JM, Benson M, Brown GR, Chao C, Chitipiralla S, et al. (2018). ClinVar: improving access to variant interpretations and supporting evidence. *Nucleic Acids Research*, 46(D1), D1062–D1067. doi:10.1093/nar/gkx1153. PMID 29165669. *(The oracle source. Defines ClinVar's review-status star system used here as the consensus signal.)*
@@ -299,12 +297,3 @@ All citations below were verified against the primary source (journal record or 
 **Related work on LLM evaluation in clinical genetics**
 
 5. (Contemporary benchmark for context.) CGBench: Benchmarking Language Model Scientific Reasoning for Clinical Genetics Research. arXiv:2510.11985. *(Recent work evaluating LLM reasoning in clinical genetics; situates this project within the active line of research on trustworthy model evaluation for genomic interpretation.)*
-
----
-
-## Author
-
-**O.J. Odimayo** — Bioinformatics Data Engineer
-MSc Applied Data Science · BSc Genetics and Molecular Biology
-
-[github.com/gbadedata](https://github.com/gbadedata) · [linkedin.com/in/oluwagbade-odimayo-](https://www.linkedin.com/in/oluwagbade-odimayo-) · oluwagbadeodimayo@gmail.com
