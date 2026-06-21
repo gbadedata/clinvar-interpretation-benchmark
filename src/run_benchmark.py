@@ -79,6 +79,44 @@ def run_benchmark(
     return report
 
 
+def _run_comparison(task: list[Variant], model: str | None) -> None:
+    """Run both evidence modes on the same variants and print the contrast.
+
+    This is the headline experiment: the same model, the same variants,
+    evaluated with and without the molecular-consequence evidence. The
+    difference in safe decisive accuracy isolates the effect of evidence on
+    model reliability, which is the core verification-loop question.
+    """
+    from src.interpreter import ClaudeInterpreter
+
+    print("\nRunning evidence-POOR mode (minimal context)...")
+    poor = ClaudeInterpreter(model=model, evidence_rich=False)
+    poor_report = run_benchmark(poor, poor.model + " (poor)", task, progress=True)
+
+    print("\nRunning evidence-RICH mode (with molecular consequence)...")
+    rich = ClaudeInterpreter(model=model, evidence_rich=True)
+    rich_report = run_benchmark(rich, rich.model + " (rich)", task, progress=True)
+
+    print_summary(poor_report)
+    print_summary(rich_report)
+
+    # The contrast
+    pa, ra = poor_report.abstention_report, rich_report.abstention_report
+    print("\n" + "=" * 66)
+    print("EVIDENCE EFFECT (the headline contrast)")
+    print("=" * 66)
+    print(f"  Overall accuracy:    {poor_report.score_report.accuracy:.3f}"
+          f"  ->  {rich_report.score_report.accuracy:.3f}")
+    print(f"  Decisiveness:        {pa.decisiveness:.3f}  ->  {ra.decisiveness:.3f}")
+    print(f"  Safe rate:           {pa.safe_rate:.3f}  ->  {ra.safe_rate:.3f}")
+    print(f"  Confident errors:    {pa.confident_errors}  ->  {ra.confident_errors}")
+    print("=" * 66)
+
+    for rep in (poor_report, rich_report):
+        out = settings.reports_dir / f"benchmark_{rep.model_name.replace('/', '_').replace(' ', '_')}.json"
+        rep.write(out)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ClinVar interpretation benchmark")
     parser.add_argument("--live", action="store_true",
@@ -91,6 +129,10 @@ def main() -> None:
                         help="cap the task set to the first N variants (for small test runs)")
     parser.add_argument("--model", type=str, default=None,
                         help="override the model string for live runs")
+    parser.add_argument("--evidence-rich", action="store_true",
+                        help="supply derived molecular consequence as ACMG evidence")
+    parser.add_argument("--compare-modes", action="store_true",
+                        help="run BOTH evidence-poor and evidence-rich and compare")
     args = parser.parse_args()
 
     use_synthetic = args.synthetic or not (args.live or args.real_data)
@@ -100,10 +142,16 @@ def main() -> None:
         task = task[: args.limit]
         log.info("task_limited", n=len(task))
 
+    if args.compare_modes:
+        _run_comparison(task, args.model)
+        return
+
     if args.live:
         from src.interpreter import ClaudeInterpreter
-        interpreter: VariantInterpreter = ClaudeInterpreter(model=args.model)
-        model_name = interpreter.model
+        interpreter: VariantInterpreter = ClaudeInterpreter(
+            model=args.model, evidence_rich=args.evidence_rich
+        )
+        model_name = interpreter.model + ("+evidence" if args.evidence_rich else "")
         progress = True
     else:
         interpreter = MockInterpreter()

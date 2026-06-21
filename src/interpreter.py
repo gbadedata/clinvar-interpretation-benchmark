@@ -59,7 +59,7 @@ Return ONLY the JSON object."""
 
 
 def build_user_prompt(variant: Variant) -> str:
-    """Build the user message for a single variant from its context."""
+    """Build the evidence-poor user message (minimal context only)."""
     ctx = variant.to_prompt_context()
     return (
         "Classify the following germline variant.\n\n"
@@ -68,6 +68,60 @@ def build_user_prompt(variant: Variant) -> str:
         f"HGVS (protein): {ctx['hgvs_p']}\n"
         f"Variant type: {ctx['consequence']}\n"
         f"Associated condition: {ctx['condition']}\n\n"
+        "Respond with the JSON object only."
+    )
+
+
+def derive_molecular_consequence(variant: Variant) -> str:
+    """Derive the real molecular consequence from the HGVS strings.
+
+    This is genuine evidence, not fabricated: it is read directly from the
+    variant's own HGVS nomenclature, which ClinVar provides. The molecular
+    consequence is the highest-value ACMG criterion (PVS1 for loss of
+    function), so supplying it is the single most informative honest piece
+    of evidence we can add.
+    """
+    blob = f"{variant.hgvs_p} {variant.hgvs_c} {variant.consequence}".lower()
+    if "fs" in blob or "frameshift" in blob:
+        return "frameshift (predicted loss of function)"
+    if "ter" in blob or "*" in blob or "stop" in blob:
+        return "nonsense / stop-gain (predicted loss of function)"
+    if "=" in variant.hgvs_p or "synonymous" in blob or "silent" in blob:
+        return "synonymous (no amino acid change)"
+    if ("+" in variant.hgvs_c or "-" in variant.hgvs_c) and "del" not in blob:
+        return "splice-region (potential splicing effect)"
+    if "del" in blob and "fs" not in blob:
+        return "in-frame deletion"
+    if "dup" in blob and "fs" not in blob:
+        return "in-frame duplication"
+    if variant.hgvs_p and variant.hgvs_p != "p.":
+        return "missense (single amino acid substitution)"
+    return "unknown consequence"
+
+
+def build_evidence_rich_prompt(variant: Variant) -> str:
+    """Build the evidence-rich user message.
+
+    Adds the derived molecular consequence and an explicit note on its ACMG
+    relevance. All evidence is read from the variant's own HGVS, so nothing
+    is fabricated; the model is simply given the functional interpretation
+    of the nomenclature it was already shown.
+    """
+    ctx = variant.to_prompt_context()
+    consequence = derive_molecular_consequence(variant)
+    return (
+        "Classify the following germline variant. Additional molecular "
+        "evidence is provided to support ACMG/AMP-style assessment.\n\n"
+        f"Gene: {ctx['gene']}\n"
+        f"HGVS (coding): {ctx['hgvs_c']}\n"
+        f"HGVS (protein): {ctx['hgvs_p']}\n"
+        f"Molecular consequence: {consequence}\n"
+        f"Associated condition: {ctx['condition']}\n\n"
+        "Consider the molecular consequence as ACMG evidence: predicted "
+        "loss-of-function variants (frameshift, nonsense, canonical splice) "
+        "in genes where loss of function is an established disease mechanism "
+        "meet strong pathogenic criteria (PVS1). Synonymous variants outside "
+        "splice regions typically lack a protein-level effect.\n\n"
         "Respond with the JSON object only."
     )
 
@@ -216,7 +270,8 @@ class ClaudeInterpreter:
     path share identical scoring.
     """
 
-    def __init__(self, model: str | None = None, max_tokens: int | None = None) -> None:
+    def __init__(self, model: str | None = None, max_tokens: int | None = None,
+                 evidence_rich: bool = False) -> None:
         from anthropic import Anthropic
 
         from config.settings import settings
@@ -224,13 +279,19 @@ class ClaudeInterpreter:
         self.client = Anthropic()
         self.model = model or settings.model
         self.max_tokens = max_tokens or settings.max_tokens
+        self.evidence_rich = evidence_rich
 
     def interpret(self, variant: Variant) -> InterpretationResult:
+        prompt = (
+            build_evidence_rich_prompt(variant)
+            if self.evidence_rich
+            else build_user_prompt(variant)
+        )
         message = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_prompt(variant)}],
+            messages=[{"role": "user", "content": prompt}],
         )
         raw = "".join(block.text for block in message.content if hasattr(block, "text"))
         return parse_response(variant.variant_id, raw)

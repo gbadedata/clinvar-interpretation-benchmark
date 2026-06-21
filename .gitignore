@@ -8,3 +8,5 @@ data/
 htmlcov/
 evidence/figures/*.png
 evidence/reports/*.json
+.env
+diag_live.py

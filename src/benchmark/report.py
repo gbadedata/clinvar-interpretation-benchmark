@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.benchmark.abstention import AbstentionReport, score_abstention
 from src.benchmark.scorer import ScoreReport, score
 from src.benchmark.validators import ValidatorSummary, summarise_validators
 from src.data_models import InterpretationResult, Variant
@@ -26,11 +27,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BenchmarkReport:
-    """Full benchmark result: oracle scoring + validator summary."""
+    """Full benchmark result: oracle scoring + abstention + validators."""
 
     model_name: str
     n_variants: int
     score_report: ScoreReport
+    abstention_report: AbstentionReport
     validator_summary: ValidatorSummary
 
     def to_dict(self) -> dict:
@@ -38,6 +40,7 @@ class BenchmarkReport:
             "model_name": self.model_name,
             "n_variants": self.n_variants,
             "oracle_agreement": self.score_report.to_dict(),
+            "abstention_analysis": self.abstention_report.to_dict(),
             "biological_validators": self.validator_summary.to_dict(),
         }
 
@@ -64,11 +67,13 @@ def build_report(
         A BenchmarkReport.
     """
     score_report = score(pairs)
+    abstention_report = score_abstention(pairs)
     validator_summary = summarise_validators(pairs)
     report = BenchmarkReport(
         model_name=model_name,
         n_variants=len(pairs),
         score_report=score_report,
+        abstention_report=abstention_report,
         validator_summary=validator_summary,
     )
     logger.info(
@@ -103,6 +108,15 @@ def print_summary(report: BenchmarkReport) -> None:
     for m in s.per_class:
         print(f"      {m.label:11s} {m.precision:.3f} / {m.recall:.3f} / "
               f"{m.f1:.3f}  (n={m.support})")
+    print()
+    a = report.abstention_report
+    print("  Abstention analysis (on confident-truth variants)")
+    print(f"    Confident-truth variants:  {a.n_confident_truth}")
+    print(f"    Correct calls:             {a.correct_calls}")
+    print(f"    Confident ERRORS (unsafe): {a.confident_errors}")
+    print(f"    Abstentions (safe):        {a.abstentions}")
+    print(f"    Safe rate (no wrong call): {a.safe_rate:.3f}")
+    print(f"    Decisiveness:              {a.decisiveness:.3f}")
     print()
     print("  Biological validators (reasoning quality)")
     for name, rate in v.pass_rates.items():
