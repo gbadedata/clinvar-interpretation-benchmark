@@ -26,7 +26,7 @@ class Classification(str, Enum):
     VUS = "vus"                      # Uncertain significance
 
     @classmethod
-    def from_clinvar(cls, raw: str) -> "Classification | None":
+    def from_clinvar(cls, raw: str) -> Classification | None:
         """Map a raw ClinVar clinical-significance string to a class.
 
         Returns None for strings that do not map cleanly (e.g. drug

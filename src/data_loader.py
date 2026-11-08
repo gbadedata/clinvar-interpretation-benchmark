@@ -152,7 +152,7 @@ def build_task_set(variants: list[Variant], seed: int | None = None) -> list[Var
         by_tier[v.tier].append(v)
 
     task: list[Variant] = []
-    for tier, items in by_tier.items():
+    for items in by_tier.values():
         rng.shuffle(items)
         task.extend(items[: settings.n_variants_per_tier])
     rng.shuffle(task)
