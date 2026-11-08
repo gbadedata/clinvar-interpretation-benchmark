@@ -7,7 +7,6 @@ check and the most prone to false positives/negatives.
 
 from __future__ import annotations
 
-from src.data_models import Classification, InterpretationResult, Tier, Variant
 from src.benchmark.validators import (
     run_validators,
     summarise_validators,
@@ -16,6 +15,7 @@ from src.benchmark.validators import (
     validate_mechanism_plausibility,
     validate_no_fabrication,
 )
+from src.data_models import Classification, InterpretationResult, Tier, Variant
 
 
 def _variant(gene="BRCA2", hgvs_c="c.5946del", hgvs_p="p.Ser1982fs",
